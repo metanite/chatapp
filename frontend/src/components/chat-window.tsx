@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import type { FormEvent, RefObject } from "react";
 import type { Conversation, Message, User } from "@/lib/types";
 import { conversationName, formatTime, initials } from "@/lib/chat";
@@ -14,17 +15,44 @@ type ChatWindowProps = {
   composer: string;
   sending: boolean;
   deleting: boolean;
+  updatingTitle: boolean;
   realtimeStatus: RealtimeStatus;
   messagesEndRef: RefObject<HTMLDivElement | null>;
   onComposerChange: (value: string) => void;
   onSend: (event: FormEvent<HTMLFormElement>) => void;
   onDelete: () => void;
+  onUpdateTitle: (title: string | null) => Promise<void>;
 };
 
-export function ChatWindow({ conversation, currentUser, messages, loadingMessages, composer, sending, deleting, realtimeStatus, messagesEndRef, onComposerChange, onSend, onDelete }: ChatWindowProps) {
+export function ChatWindow({ conversation, currentUser, messages, loadingMessages, composer, sending, deleting, updatingTitle, realtimeStatus, messagesEndRef, onComposerChange, onSend, onDelete, onUpdateTitle }: ChatWindowProps) {
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
+
+  function beginTitleEdit() {
+    setTitleDraft(conversation.title ?? "");
+    setEditingTitle(true);
+  }
+
+  async function submitTitle(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    try {
+      await onUpdateTitle(titleDraft.trim() || null);
+      setEditingTitle(false);
+    } catch {
+      // The page displays the API error and leaves the editor open.
+    }
+  }
+
   return (
     <section className="chat-panel">
-      <header className="chat-header"><div><p className="eyebrow">Your conversation</p><h1>{conversationName(conversation, currentUser)}</h1></div><div className="chat-header-actions"><div className={`online-status ${realtimeStatus}`}><span /> {realtimeStatus === "live" ? "Reverb live" : realtimeStatus === "connecting" ? "Connecting…" : "Reverb offline"}</div><button className="delete-button" onClick={onDelete} disabled={deleting}>{deleting ? "Deleting…" : "Delete"}</button></div></header>
+      <header className="chat-header">
+        <div className="chat-title-block">
+          <p className="eyebrow">Your conversation</p>
+          {editingTitle ? <form className="title-editor" onSubmit={submitTitle}><input value={titleDraft} onChange={(event) => setTitleDraft(event.target.value)} maxLength={255} autoFocus placeholder={conversationName(conversation, currentUser)} aria-label="Conversation title" /><button type="submit" disabled={updatingTitle}>{updatingTitle ? "Saving…" : "Save"}</button><button type="button" className="cancel-title-button" onClick={() => setEditingTitle(false)}>Cancel</button></form> : <div className="chat-title-row"><h1>{conversationName(conversation, currentUser)}</h1><button className="edit-title-button" onClick={beginTitleEdit} aria-label="Edit conversation title">Edit</button></div>}
+        </div>
+        <div className="chat-header-actions"><div className={`online-status ${realtimeStatus}`}><span /> {realtimeStatus === "live" ? "Reverb live" : realtimeStatus === "connecting" ? "Connecting…" : "Reverb offline"}</div><button className="delete-button" onClick={onDelete} disabled={deleting}>{deleting ? "Deleting…" : "Delete"}</button></div>
+      </header>
       <div className="message-area">
         <div className="date-divider"><span>Today</span></div>
         {loadingMessages && <p className="message-state">Loading messages...</p>}

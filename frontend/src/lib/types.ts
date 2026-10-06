@@ -42,3 +42,8 @@ export type ConversationDeletedEvent = {
   conversation_id: number;
   deleted_by: number;
 };
+
+export type ConversationUpdatedEvent = {
+  conversation: Conversation;
+  updated_by: number;
+};

@@ -7,7 +7,7 @@ import { ConversationSidebar } from "@/components/conversation-sidebar";
 import { NewChatModal } from "@/components/new-chat-modal";
 import { api, ApiError, getReverbConfig } from "@/lib/api";
 import { conversationName, mergeMessage } from "@/lib/chat";
-import type { AuthResponse, Conversation, ConversationCreatedEvent, ConversationDeletedEvent, Message, User } from "@/lib/types";
+import type { AuthResponse, Conversation, ConversationCreatedEvent, ConversationDeletedEvent, ConversationUpdatedEvent, Message, User } from "@/lib/types";
 
 const TOKEN_KEY = "chat_token";
 
@@ -33,6 +33,7 @@ export default function Home() {
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [sending, setSending] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [updatingTitle, setUpdatingTitle] = useState(false);
   const [composer, setComposer] = useState("");
   const [notice, setNotice] = useState("");
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
@@ -141,6 +142,12 @@ export default function Home() {
             setMessages([]);
             setSelectedId(null);
           }
+        })
+        .listen(".conversation.updated", (payload) => {
+          const event = payload as ConversationUpdatedEvent;
+          setConversations((current) => current.map((conversation) => conversation.id === event.conversation.id
+            ? { ...conversation, ...event.conversation, messages_count: conversation.messages_count }
+            : conversation));
         });
 
       if (conversationChannelName) {
@@ -275,6 +282,23 @@ export default function Home() {
     }
   }
 
+  async function updateConversationTitle(title: string | null) {
+    if (!token || !selectedConversation || updatingTitle) return;
+
+    setUpdatingTitle(true);
+    try {
+      const updatedConversation = await api.updateConversation(token, selectedConversation.id, title);
+      setConversations((current) => current.map((conversation) => conversation.id === updatedConversation.id
+        ? { ...conversation, ...updatedConversation, messages_count: conversation.messages_count }
+        : conversation));
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Unable to update conversation title.");
+      throw error;
+    } finally {
+      setUpdatingTitle(false);
+    }
+  }
+
   if (booting) {
     return <div className="loading-screen">Loading your conversations<span className="pulse-dots">...</span></div>;
   }
@@ -286,7 +310,7 @@ export default function Home() {
   return (
     <main className="app-shell">
       <ConversationSidebar currentUser={currentUser} conversations={conversations} selectedId={selectedId} onSelect={setSelectedId} onNewChat={() => setNewChatOpen(true)} onLogout={logout} />
-      {selectedConversation ? <ChatWindow conversation={selectedConversation} currentUser={currentUser} messages={messages} loadingMessages={loadingMessages} composer={composer} sending={sending} deleting={deleting} realtimeStatus={realtimeStatus} messagesEndRef={messagesEndRef} onComposerChange={setComposer} onSend={sendMessage} onDelete={deleteConversation} /> : <section className="chat-panel"><div className="no-conversation"><span className="empty-icon">✦</span><h1>Your space is ready.</h1><p>Choose a conversation or start a new one.</p><button className="primary-button compact" onClick={() => setNewChatOpen(true)}>Start a conversation <span>→</span></button></div></section>}
+      {selectedConversation ? <ChatWindow conversation={selectedConversation} currentUser={currentUser} messages={messages} loadingMessages={loadingMessages} composer={composer} sending={sending} deleting={deleting} updatingTitle={updatingTitle} realtimeStatus={realtimeStatus} messagesEndRef={messagesEndRef} onComposerChange={setComposer} onSend={sendMessage} onDelete={deleteConversation} onUpdateTitle={updateConversationTitle} /> : <section className="chat-panel"><div className="no-conversation"><span className="empty-icon">✦</span><h1>Your space is ready.</h1><p>Choose a conversation or start a new one.</p><button className="primary-button compact" onClick={() => setNewChatOpen(true)}>Start a conversation <span>→</span></button></div></section>}
       {newChatOpen && <NewChatModal search={userSearch} users={userResults} loading={usersLoading} onSearchChange={setUserSearch} onClose={() => setNewChatOpen(false)} onSelectUser={createConversation} />}
       {notice && <button className="notice" onClick={() => setNotice("")}>{notice} <span>×</span></button>}
     </main>

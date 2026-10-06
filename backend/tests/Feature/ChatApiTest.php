@@ -41,6 +41,13 @@ class ChatApiTest extends TestCase
             ->assertOk();
 
         $this->withToken($token)
+            ->patchJson("/api/conversations/{$conversationId}", [
+                'title' => 'Project chat',
+            ])
+            ->assertOk()
+            ->assertJsonPath('title', 'Project chat');
+
+        $this->withToken($token)
             ->postJson("/api/conversations/{$conversationId}/messages", [
                 'body' => 'Hello, Bob!',
             ])

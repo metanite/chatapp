@@ -74,6 +74,11 @@ export const api = {
     }, token),
   deleteConversation: (token: string, conversationId: number) =>
     request<{ message: string }>(`/conversations/${conversationId}`, { method: "DELETE" }, token),
+  updateConversation: (token: string, conversationId: number, title: string | null) =>
+    request<Conversation>(`/conversations/${conversationId}`, {
+      method: "PATCH",
+      body: { title },
+    }, token),
   messages: (token: string, conversationId: number) =>
     request<Paginated<Message>>(`/conversations/${conversationId}/messages`, {}, token),
   sendMessage: (token: string, conversationId: number, body: string) =>

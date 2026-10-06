@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Events\ConversationCreated;
 use App\Events\ConversationDeleted;
+use App\Events\ConversationUpdated;
 use App\Http\Controllers\Controller;
 use App\Models\Conversation;
 use Illuminate\Http\JsonResponse;
@@ -61,6 +62,22 @@ class ConversationController extends Controller
                 'messages.user:id,name',
             ]),
         );
+    }
+
+    public function update(Request $request, Conversation $conversation): JsonResponse
+    {
+        $this->ensureMember($request, $conversation);
+
+        $data = $request->validate([
+            'title' => ['nullable', 'string', 'max:255'],
+        ]);
+
+        $conversation->update(['title' => $data['title'] ?? null]);
+        $conversation->load('users:id,name');
+
+        broadcast(new ConversationUpdated($conversation, $request->user()->id));
+
+        return response()->json($conversation);
     }
 
     public function destroy(Request $request, Conversation $conversation): JsonResponse
