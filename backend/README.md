@@ -36,10 +36,11 @@ Authenticated endpoints require `Authorization: Bearer <token>`:
 - `GET /conversations`
 - `POST /conversations` with `{ "title": "Optional title", "user_ids": [2] }`
 - `GET /conversations/{conversation}`
+- `DELETE /conversations/{conversation}`
 - `GET /conversations/{conversation}/messages`
 - `POST /conversations/{conversation}/messages` with `{ "body": "Hello" }`
 
-New messages are broadcast as `message.sent` on the private channel `conversations.{conversation_id}`. The channel authorizer only allows conversation members to subscribe.
+New messages are broadcast as `message.sent` on the private channel `conversations.{conversation_id}`. Conversation creation and deletion are broadcast as `conversation.created` and `conversation.deleted` on each member's private `App.Models.User.{user_id}` channel. The channel authorizer only allows the corresponding user or conversation members to subscribe.
 
 ## Verification
 

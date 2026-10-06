@@ -53,5 +53,14 @@ class ChatApiTest extends TestCase
             'user_id' => $registration->json('user.id'),
             'body' => 'Hello, Bob!',
         ]);
+
+        $this->withToken($token)
+            ->deleteJson("/api/conversations/{$conversationId}")
+            ->assertOk()
+            ->assertJsonPath('message', 'Conversation deleted.');
+
+        $this->assertDatabaseMissing('conversations', ['id' => $conversationId]);
+        $this->assertDatabaseMissing('messages', ['conversation_id' => $conversationId]);
+        $this->assertDatabaseMissing('conversation_user', ['conversation_id' => $conversationId]);
     }
 }
