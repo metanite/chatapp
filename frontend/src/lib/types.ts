@@ -32,3 +32,13 @@ export type AuthResponse = {
   user: User;
   token: string;
 };
+
+export type ConversationCreatedEvent = {
+  conversation: Conversation;
+  created_by: number;
+};
+
+export type ConversationDeletedEvent = {
+  conversation_id: number;
+  deleted_by: number;
+};

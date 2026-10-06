@@ -72,6 +72,8 @@ export const api = {
       method: "POST",
       body: { user_ids: userIds },
     }, token),
+  deleteConversation: (token: string, conversationId: number) =>
+    request<{ message: string }>(`/conversations/${conversationId}`, { method: "DELETE" }, token),
   messages: (token: string, conversationId: number) =>
     request<Paginated<Message>>(`/conversations/${conversationId}/messages`, {}, token),
   sendMessage: (token: string, conversationId: number, body: string) =>

@@ -1,13 +1,18 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { AuthPanel } from "@/components/auth-panel";
+import { ChatWindow } from "@/components/chat-window";
+import { ConversationSidebar } from "@/components/conversation-sidebar";
+import { NewChatModal } from "@/components/new-chat-modal";
 import { api, ApiError, getReverbConfig } from "@/lib/api";
-import type { AuthResponse, Conversation, Message, User } from "@/lib/types";
+import { conversationName, mergeMessage } from "@/lib/chat";
+import type { AuthResponse, Conversation, ConversationCreatedEvent, ConversationDeletedEvent, Message, User } from "@/lib/types";
 
 const TOKEN_KEY = "chat_token";
 
 type ReverbChannel = {
-  listen: (event: string, callback: (message: Message) => void) => ReverbChannel;
+  listen: (event: string, callback: (payload: unknown) => void) => ReverbChannel;
   subscribed: (callback: () => void) => ReverbChannel;
   error: (callback: (error: unknown) => void) => ReverbChannel;
 };
@@ -18,26 +23,6 @@ type ReverbEcho = {
   disconnect: () => void;
 };
 
-function initials(name: string) {
-  return name.split(" ").map((part) => part[0]).join("").slice(0, 2).toUpperCase();
-}
-
-function formatTime(value?: string) {
-  if (!value) return "";
-  return new Intl.DateTimeFormat("en", { hour: "numeric", minute: "2-digit" }).format(new Date(value));
-}
-
-function conversationName(conversation: Conversation, currentUser?: User | null) {
-  if (conversation.title) return conversation.title;
-  const otherUser = conversation.users?.find((user) => user.id !== currentUser?.id);
-  return otherUser?.name ?? conversation.users?.[0]?.name ?? "New conversation";
-}
-
-function mergeMessage(messages: Message[], incoming: Message) {
-  if (messages.some((message) => message.id === incoming.id)) return messages;
-  return [...messages, incoming];
-}
-
 export default function Home() {
   const [token, setToken] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -47,6 +32,7 @@ export default function Home() {
   const [booting, setBooting] = useState(true);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [sending, setSending] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [composer, setComposer] = useState("");
   const [notice, setNotice] = useState("");
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
@@ -82,6 +68,7 @@ export default function Home() {
 
   useEffect(() => {
     if (!token) return;
+
     api.conversations(token)
       .then((response) => {
         setConversations(response.data);
@@ -91,9 +78,7 @@ export default function Home() {
   }, [token]);
 
   useEffect(() => {
-    if (!token || !selectedId) {
-      return;
-    }
+    if (!token || !selectedId) return;
 
     Promise.resolve()
       .then(() => setLoadingMessages(true))
@@ -108,12 +93,11 @@ export default function Home() {
   }, [messages]);
 
   useEffect(() => {
-    if (!token || !selectedId) {
-      return;
-    }
+    if (!token || !currentUser) return;
 
     let echo: ReverbEcho | null = null;
-    const channelName = `conversations.${selectedId}`;
+    const userChannelName = `App.Models.User.${currentUser.id}`;
+    const conversationChannelName = selectedId ? `conversations.${selectedId}` : null;
     let cancelled = false;
     const statusTimer = window.setTimeout(() => setRealtimeStatus("connecting"), 0);
 
@@ -142,13 +126,32 @@ export default function Home() {
         auth: { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } },
       });
 
-      echo.private(channelName)
-        .subscribed(() => setRealtimeStatus("live"))
-        .error((error) => {
-          console.error("Reverb channel subscription failed", error);
-          setRealtimeStatus("offline");
+      echo.private(userChannelName)
+        .error((error) => console.error("Reverb user channel subscription failed", error))
+        .listen(".conversation.created", (payload) => {
+          const event = payload as ConversationCreatedEvent;
+          setConversations((current) => current.some((conversation) => conversation.id === event.conversation.id)
+            ? current
+            : [event.conversation, ...current]);
         })
-        .listen(".message.sent", (message) => setMessages((current) => mergeMessage(current, message)));
+        .listen(".conversation.deleted", (payload) => {
+          const event = payload as ConversationDeletedEvent;
+          setConversations((current) => current.filter((conversation) => conversation.id !== event.conversation_id));
+          if (selectedId === event.conversation_id) {
+            setMessages([]);
+            setSelectedId(null);
+          }
+        });
+
+      if (conversationChannelName) {
+        echo.private(conversationChannelName)
+          .subscribed(() => setRealtimeStatus("live"))
+          .error((error) => {
+            console.error("Reverb conversation channel subscription failed", error);
+            setRealtimeStatus("offline");
+          })
+          .listen(".message.sent", (payload) => setMessages((current) => mergeMessage(current, payload as Message)));
+      }
     }
 
     subscribe().catch((error) => {
@@ -159,10 +162,11 @@ export default function Home() {
     return () => {
       cancelled = true;
       window.clearTimeout(statusTimer);
-      echo?.leave(channelName);
+      echo?.leave(userChannelName);
+      if (conversationChannelName) echo?.leave(conversationChannelName);
       echo?.disconnect();
     };
-  }, [token, selectedId]);
+  }, [token, currentUser, selectedId]);
 
   useEffect(() => {
     if (!newChatOpen || !token) return;
@@ -217,6 +221,7 @@ export default function Home() {
 
   async function createConversation(user: User) {
     if (!token) return;
+
     try {
       const conversation = await api.createConversation(token, [user.id]);
       setConversations((current) => [conversation, ...current.filter((item) => item.id !== conversation.id)]);
@@ -249,61 +254,40 @@ export default function Home() {
     }
   }
 
+  async function deleteConversation() {
+    if (!token || !selectedConversation || deleting) return;
+
+    const name = conversationName(selectedConversation, currentUser);
+    if (!window.confirm(`Delete the conversation with ${name}? This cannot be undone.`)) return;
+
+    setDeleting(true);
+    try {
+      await api.deleteConversation(token, selectedConversation.id);
+      const remaining = conversations.filter((conversation) => conversation.id !== selectedConversation.id);
+      setConversations(remaining);
+      setSelectedId(remaining[0]?.id ?? null);
+      setMessages([]);
+      setNotice("Conversation deleted.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Unable to delete conversation.");
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   if (booting) {
     return <div className="loading-screen">Loading your conversations<span className="pulse-dots">...</span></div>;
   }
 
   if (!token || !currentUser) {
-    return (
-      <main className="auth-shell">
-        <section className="auth-intro">
-          <p className="eyebrow">A quieter place to talk</p>
-          <h1>Good conversations have room to breathe.</h1>
-          <p className="intro-copy">A small, focused chat space for the people and ideas you want close.</p>
-          <div className="intro-mark" aria-hidden="true"><span>••</span><i /></div>
-        </section>
-        <section className="auth-card">
-          <div className="auth-card-top"><div className="brand-mark">ch<span>at</span></div><span className="status-dot">Private beta</span></div>
-          <div className="auth-heading"><p className="eyebrow">{authMode === "login" ? "Welcome back" : "Make an account"}</p><h2>{authMode === "login" ? "Pick up where you left off." : "Start a new thread."}</h2></div>
-          <form className="auth-form" onSubmit={submitAuth}>
-            {authMode === "register" && <label><span>Your name</span><input name="name" required placeholder="Ada Lovelace" /></label>}
-            <label><span>Email address</span><input name="email" type="email" required placeholder="you@example.com" /></label>
-            <label><span>Password</span><input name="password" type="password" minLength={8} required placeholder="8 characters minimum" /></label>
-            {authError && <p className="form-error">{authError}</p>}
-            <button className="primary-button" disabled={authLoading}>{authLoading ? "One moment..." : authMode === "login" ? "Enter chat" : "Create account"}<span>→</span></button>
-          </form>
-          <button className="text-button" onClick={() => { setAuthMode(authMode === "login" ? "register" : "login"); setAuthError(""); }}>{authMode === "login" ? "Need an account? Create one" : "Already have an account? Sign in"}</button>
-        </section>
-      </main>
-    );
+    return <AuthPanel mode={authMode} loading={authLoading} error={authError} onSubmit={submitAuth} onToggleMode={() => { setAuthMode(authMode === "login" ? "register" : "login"); setAuthError(""); }} />;
   }
 
   return (
     <main className="app-shell">
-      <aside className="sidebar">
-        <div className="sidebar-header"><div className="brand-mark">ch<span>at</span></div><button className="icon-button" onClick={() => setNewChatOpen(true)} aria-label="Start new conversation">+</button></div>
-        <div className="sidebar-label"><span>Conversations</span><span>{conversations.length}</span></div>
-        <div className="conversation-list">
-          {conversations.length === 0 && <div className="empty-sidebar"><span className="empty-icon">✦</span><p>No conversations yet.</p><small>Start one with the + above.</small></div>}
-          {conversations.map((conversation) => <button key={conversation.id} className={`conversation-item ${selectedId === conversation.id ? "selected" : ""}`} onClick={() => setSelectedId(conversation.id)}><span className="avatar">{initials(conversationName(conversation, currentUser))}</span><span className="conversation-copy"><strong>{conversationName(conversation, currentUser)}</strong><small>{conversation.messages_count ? `${conversation.messages_count} messages` : "No messages yet"}</small></span><span className="conversation-time">{formatTime(conversation.updated_at)}</span></button>)}
-        </div>
-        <div className="profile-card"><span className="avatar avatar-small">{initials(currentUser.name)}</span><span className="profile-copy"><strong>{currentUser.name}</strong><small>Online now</small></span><button className="logout-button" onClick={logout}>↗</button></div>
-      </aside>
-
-      <section className="chat-panel">
-        {selectedConversation ? <>
-          <header className="chat-header"><div><p className="eyebrow">Your conversation</p><h1>{conversationName(selectedConversation, currentUser)}</h1></div><div className={`online-status ${realtimeStatus}`}><span /> {realtimeStatus === "live" ? "Reverb live" : realtimeStatus === "connecting" ? "Connecting…" : "Reverb offline"}</div></header>
-          <div className="message-area">
-            <div className="date-divider"><span>Today</span></div>
-            {loadingMessages && <p className="message-state">Loading messages...</p>}
-            {!loadingMessages && messages.length === 0 && <div className="message-state"><span className="empty-icon">✦</span><p>This is the beginning.</p><small>Send the first message below.</small></div>}
-            <div className="messages">{messages.map((message) => { const own = message.user.id === currentUser.id; return <article key={message.id} className={`message-row ${own ? "own" : ""}`}><span className="message-avatar">{initials(message.user.name)}</span><div className="message-content"><div className="message-meta"><strong>{own ? "You" : message.user.name}</strong><time>{formatTime(message.created_at)}</time></div><p className="message-bubble">{message.body}</p></div></article>; })}<div ref={messagesEndRef} /></div>
-          </div>
-          <form className="composer" onSubmit={sendMessage}><input value={composer} onChange={(event) => setComposer(event.target.value)} placeholder="Write a message..." aria-label="Message" /><button disabled={sending || !composer.trim()} aria-label="Send message">{sending ? "…" : "↑"}</button></form>
-        </> : <div className="no-conversation"><span className="empty-icon">✦</span><h1>Your space is ready.</h1><p>Choose a conversation or start a new one.</p><button className="primary-button compact" onClick={() => setNewChatOpen(true)}>Start a conversation <span>→</span></button></div>}
-      </section>
-
-      {newChatOpen && <div className="modal-backdrop" onClick={() => setNewChatOpen(false)}><section className="new-chat-modal" onClick={(event) => event.stopPropagation()}><div className="modal-header"><div><p className="eyebrow">New conversation</p><h2>Who would you like to talk to?</h2></div><button className="close-button" onClick={() => setNewChatOpen(false)}>×</button></div><input className="search-input" value={userSearch} onChange={(event) => setUserSearch(event.target.value)} autoFocus placeholder="Search by name or email" /><div className="user-results">{usersLoading ? <p className="message-state">Searching...</p> : userResults.length === 0 ? <p className="message-state">No people found.</p> : userResults.map((user) => <button className="user-result" key={user.id} onClick={() => createConversation(user)}><span className="avatar">{initials(user.name)}</span><span><strong>{user.name}</strong><small>{user.email}</small></span><span className="result-arrow">→</span></button>)}</div></section></div>}
+      <ConversationSidebar currentUser={currentUser} conversations={conversations} selectedId={selectedId} onSelect={setSelectedId} onNewChat={() => setNewChatOpen(true)} onLogout={logout} />
+      {selectedConversation ? <ChatWindow conversation={selectedConversation} currentUser={currentUser} messages={messages} loadingMessages={loadingMessages} composer={composer} sending={sending} deleting={deleting} realtimeStatus={realtimeStatus} messagesEndRef={messagesEndRef} onComposerChange={setComposer} onSend={sendMessage} onDelete={deleteConversation} /> : <section className="chat-panel"><div className="no-conversation"><span className="empty-icon">✦</span><h1>Your space is ready.</h1><p>Choose a conversation or start a new one.</p><button className="primary-button compact" onClick={() => setNewChatOpen(true)}>Start a conversation <span>→</span></button></div></section>}
+      {newChatOpen && <NewChatModal search={userSearch} users={userResults} loading={usersLoading} onSearchChange={setUserSearch} onClose={() => setNewChatOpen(false)} onSelectUser={createConversation} />}
       {notice && <button className="notice" onClick={() => setNotice("")}>{notice} <span>×</span></button>}
     </main>
   );
